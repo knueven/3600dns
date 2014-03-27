@@ -1,5 +1,5 @@
 /*
- * CS3600, Spring 2014
+ * CS3600, Spring 2013
  * Project 3 Starter Code
  * (c) 2013 Alan Mislove
  *
@@ -19,8 +19,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-
+#include <errno.h>
 #include "3600dns.h"
+int parse_ip( unsigned char* packet, unsigned char* rdata, int startPosition );
+int parse_qname( unsigned char* packet, unsigned char* qname, int startPosition );
 
 /**
  * This function will print a hex dump of the provided packet to the screen
@@ -88,50 +90,317 @@ int main(int argc, char *argv[]) {
    * need to fill in many of the details, but this should be enough to
    * get you started.
    */
-
   // process the arguments
-
-  // construct the DNS request
-
-  // send the DNS request (and call dump_packet with your request)
-  
-  // first, open a UDP socket  
-  int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-  // next, construct the destination address
-  struct sockaddr_in out;
-  out.sin_family = AF_INET;
-  out.sin_port = htons(<<DNS server port number, as short>>);
-  out.sin_addr.s_addr = inet_addr(<<DNS server IP as char*>>);
-
-  if (sendto(sock, <<your packet>>, <<packet len>>, 0, &out, sizeof(out)) < 0) {
-    // an error occurred
-  }
-
-  // wait for the DNS reply (timeout: 5 seconds)
-  struct sockaddr_in in;
-  socklen_t in_len;
-
-  // construct the socket set
-  fd_set socks;
-  FD_ZERO(&socks);
-  FD_SET(sock, &socks);
-
-  // construct the timeout
-  struct timeval t;
-  t.tv_sec = <<your timeout in seconds>>;
-  t.tv_usec = 0;
-
-  // wait to receive, or for a timeout
-  if (select(sock + 1, &socks, NULL, NULL, &t)) {
-    if (recvfrom(sock, <<your input buffer>>, <<input len>>, 0, &in, &in_len) < 0) {
-      // an error occured
+    if (argc != 3 && argc != 4) {
+         printf("Usage: ./3600dns [-ns|-mx] @<server:port> <name>\n");
+        exit(-1);
+    } 
+    char serverType = RECORDS;
+    if (argc == 4) {
+        if (!strcmp(argv[1],"-mx")){
+            serverType = MX;
+        } else if (!strcmp(argv[1],"-ns")){
+            serverType = NS;
+        } else {
+            return -1;
+        }
+        argc = 1;
+    } else {
+        argc = 0;
     }
-  } else {
-    // a timeout occurred
-  }
+   // set the default port to 53
+    int port = 53;
+    char* name = calloc(150,sizeof(char));
+    char* server = argv[argc+1] + 1;
+    memcpy( name,argv[argc+2],strlen(argv[2]) );
+    char* offset = strchr(argv[argc+1], ':');
+    if (offset) {
+        *offset = 0;
+        port = atoi(offset + 1);
+    } 
+   
+  // construct the DNS request
+    
+    //Structure mallocs
+    unsigned char* packetDNS =  (unsigned char*)calloc(MAX_IP_PACKET_SIZE, sizeof(char));
+    if (!packetDNS) {
+        return -1;
+    }
+    dnsheader* header =  (dnsheader*)calloc(1, sizeof(dnsheader));
+    if (!header) {
+        return -1;
+    }
+    dnsquestion* question =  (dnsquestion*)calloc(1, sizeof(dnsquestion));
+    if (!question) { 
+        return -1;
+    }
+    dnsanswer* answer =  (dnsanswer*)calloc(1, sizeof(dnsanswer));
+        if (!answer) {
+            return -1;
+    }
 
-  // print out the result
-  
-  return 0;
+    //setup the header
+    header->ID = htons(QUERY_ID);
+    header->RD = ~(0);
+    header->QDCOUNT = htons(0x0001);
+    //setup the question, QNAME is added later
+    switch (serverType){
+        case RECORDS: 
+            question->QTYPE = htons(0x0001);
+            break;
+        case MX:
+            question->QTYPE = htons(MX);
+            break;
+        case NS:
+             question->QTYPE = htons(NS);
+            break;
+    }
+    question->QCLASS = htons(0x0001);
+
+    int packetSize = 0;
+    //copy header into packet
+    memcpy( packetDNS, header,  sizeof(dnsheader) );
+    packetSize += sizeof(dnsheader);
+
+    //copy qname into packet
+    int length = strlen(name);
+    char* period = NULL;
+    *( name + length ) = '.';
+    *( name + length + 1 ) = 0;
+    while ( (period = strchr(name, '.')) != 0 ) {
+        *period = 0;
+        length = strlen(name);
+        memcpy( packetDNS + packetSize, &length, 1 );
+        packetSize++;
+        memcpy( packetDNS + packetSize, name, length);
+        packetSize += length;
+        name = period + 1;
+    }
+
+    //copy zero byte at end of qname
+    char zeroByte = 0;
+    memcpy( packetDNS + packetSize, &zeroByte, 1 );
+    packetSize++;
+
+    //copy question into packet
+    memcpy( packetDNS + packetSize, question, sizeof(dnsquestion) );
+    packetSize += sizeof(dnsquestion);
+
+
+   // send the DNS request (and call dump_packet with your request)
+    dump_packet( packetDNS, packetSize );
+
+   // first, open a UDP socket  
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+   // next, construct the destination address
+    struct sockaddr_in out;
+    out.sin_family = AF_INET;
+    out.sin_port = htons( (short) port );
+    out.sin_addr.s_addr = inet_addr(server);
+
+    if (sendto(sock, packetDNS, packetSize, 0, (struct sockaddr*)&out, sizeof(out)) < 0) {
+        printf("Error occured in sendto\n");
+        return -1;
+    }
+
+    //Clear question buffer to use for answer buffer in the future  
+    memset( packetDNS, 0, MAX_IP_PACKET_SIZE );
+    memset( question, 0, sizeof(dnsquestion) );
+    memset( header, 0, sizeof(dnsheader) );
+    packetSize = 0;
+
+    // wait for the DNS reply (timeout: 5 seconds)
+    struct sockaddr_in in;
+    socklen_t in_len;
+
+    // construct the socket set
+    fd_set socks;
+    FD_ZERO(&socks);
+    FD_SET(sock, &socks);
+
+    // construct the timeout
+    struct timeval t;
+    t.tv_sec = 5;
+    t.tv_usec = 0;
+    
+    // wait to receive, or for a timeout
+    
+    if (select(sock + 1, &socks, NULL, NULL, &t)) {
+        in_len = sizeof(in);
+        int status;
+        status = recvfrom(sock, packetDNS, MAX_IP_PACKET_SIZE, 0, (struct sockaddr*) &in, &in_len);
+        if ( status < 0) {
+            printf("%s in recvfrom\n",strerror(errno));
+            return -1;    
+        }
+        if (!header) {
+            return -1;
+        }
+        /*==========================
+            Parse response HEADER
+           ==========================*/
+        //Check header for consistency
+        memcpy( header,packetDNS,sizeof(dnsheader) );
+        if ( ntohs(header->ID) != QUERY_ID || 
+             header->QR != 1 || 
+             header->RD != 1 || 
+             header->RA != 1 ) {
+            printf("ERROR: Header mismatch\n");
+            return 1;
+        }
+        packetSize = sizeof(dnsheader);
+        int numAnswers = ntohs(header->ANCOUNT);
+        /*==========================
+            Parse response QUESTION QNAME
+           ==========================*/
+        unsigned char* qname = calloc(150, sizeof(char));
+        int len = parse_qname( packetDNS, qname, sizeof(dnsheader) );
+        if (!strcmp((char*)argv[2],(char*)qname+1)) {
+            printf("ERROR: qname mismatch '%s'\n",qname);
+            return -1;
+        }
+        
+        packetSize += len;
+        /*==========================
+            Parse response QUESTION
+           ==========================*/
+        memcpy( question, packetDNS+packetSize, sizeof(dnsquestion) );
+        if ( (ntohs(question->QTYPE) != RECORDS && 
+             ntohs(question->QTYPE) != MX && 
+             ntohs(question->QTYPE) != NS) || 
+             ntohs(question->QCLASS) != (1) ) {
+             printf("ERROR: question mismatch\n");
+            return -1;
+        }         
+        packetSize += sizeof(dnsquestion); 
+        /*==========================
+            Parse response ANSWER QNAME
+           ==========================*/
+        do {
+        memset(qname,0,150);
+        len = parse_qname(packetDNS,qname,packetSize);
+        if (!strcmp((char*)argv[2],(char*)qname+1)) {
+            printf("ERROR: answer qname mismatch '%s'\n",qname);
+            return -1;
+        }
+        packetSize += len;
+        /*==========================
+            Parse response ANSWER
+           ==========================*/
+        memcpy(answer,packetDNS+packetSize,sizeof(dnsanswer));
+        if ((ntohs(answer->TYPE) != RECORDS && 
+             ntohs(answer->TYPE) != CNAME && 
+             ntohs(answer->TYPE) != MX && 
+             ntohs(answer->TYPE) != NS) ||  
+            ntohs(answer->CLASS) != 1 ) {
+            printf("NOTFOUND\n");
+            return 1;
+        }
+        //Two bytes need to be subtracted from dnsanswer becasue padding was added
+        packetSize += sizeof(dnsanswer) - 2;
+        /*=====================
+            Parse response RDATA
+           =====================*/
+        unsigned char* rdata = calloc(150,sizeof(char));
+        short preference = 0;
+        if ( ntohs(answer->TYPE) == RECORDS ) {
+            parse_ip(packetDNS,rdata,packetSize);
+            printf("IP\t%s",rdata);
+            packetSize += ntohs(answer->RDLENGTH);
+        } 
+        else if ( ntohs(answer->TYPE) == CNAME ) {
+            len = parse_qname(packetDNS,rdata,packetSize);
+            printf("CNAME\t%s",rdata);
+            packetSize += len;
+        } 
+        else if ( ntohs(answer->TYPE) == NS ) {
+            len = parse_qname(packetDNS,rdata,packetSize);
+            printf("NS\t%s",rdata);
+            packetSize += len;
+        } 
+        else if ( ntohs(answer->TYPE) == MX ) {
+            memcpy(&preference,packetDNS+packetSize,sizeof(short));
+            packetSize+=sizeof(preference);  
+            preference = ntohs(preference); 
+            len = parse_qname(packetDNS,rdata,packetSize);
+            printf("MX\t%s\t%d",rdata,preference);
+            packetSize += len;
+        }
+            
+        if ( header->AA) {
+            printf("\tauth\n");
+        }else{
+            printf("\tnonauth\n");
+        }
+        numAnswers--;
+      } while (numAnswers);
+    } else {
+        // a timeout occurred
+        printf("NORESPONSE");
+    }
+    // print out the result
+    //dump_packet( packetDNS, packetSize);
+    free(header);
+    free(question);
+    free(packetDNS);
+    free(answer);
+    return 0;
+}
+
+
+//Parse IP addresses
+int parse_ip( unsigned char* packet, unsigned char* rdata, int startPosition ) {
+    unsigned char a = packet[startPosition];
+    int position = startPosition + 1;
+    unsigned char segments[4];
+   for (int i = 0; i < 4; i++)
+   {
+       /* if (a & 192) {
+            a = packet[position];
+            position = a;
+        } else*/ {
+            segments[i] = a;
+        }
+        a = packet[position];
+        position++;
+    }
+    sprintf((char*)rdata,"%d.%d.%d.%d",segments[0],segments[1],segments[2],segments[3]);
+    return 4;
+}
+
+//takes a packet, a char* and an offset and retrieves the qname at the given position
+int parse_qname( unsigned char* packet, unsigned char* qname, int startPosition ) {
+    unsigned char a = packet[startPosition];
+    int position = startPosition + 1;
+    int bytesWritten = 0;
+    int final_position = 0;
+    while (a != 0) {
+        if (a & 192) {
+            a = packet[position];
+            if (!final_position) {
+                final_position = position+1;
+            }
+            position = a;
+        } else {
+            for (int x = 0; x < a; x++) {
+                qname[bytesWritten] = packet[position];
+                position++;
+                bytesWritten++;
+            }
+            qname[bytesWritten] = '.';
+            bytesWritten++;
+        }
+        a = packet[position];
+        position++;
+    }
+
+    if (qname[bytesWritten - 1] == '.') {
+        bytesWritten--;
+    }
+    qname[bytesWritten] = 0; 
+    if (!final_position) {
+                final_position = position;
+    }
+    return final_position-startPosition;
 }

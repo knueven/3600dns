@@ -1,5 +1,5 @@
 /*
- * CS3600, Spring 2014
+ * CS3600, Spring 2013
  * Project 2 Starter Code
  * (c) 2013 Alan Mislove
  *
@@ -8,36 +8,40 @@
 #ifndef __3600DNS_H__
 #define __3600DNS_H__
 
-typedef struct { //structure for DNS Header (see handout page 2-3) 
- unsigned short id; 
- unsigned short rd :1; 
- unsigned short tc :1; 
- unsigned short aa :1; 
- unsigned short opcode :4; 
- unsigned short qr :1; 
- 
- unsigned short rcode :4; 
- unsigned short z :3; 
- unsigned short ra :1; 
- unsigned short qdcount; 
- unsigned short ancount; 
- unsigned short nscount; 
- unsigned short arcount; 
+#define MAX_IP_PACKET_SIZE 65542
+#define QUERY_ID 1337
+#define RECORDS 1
+#define CNAME 5
+#define MX 15
+#define NS 2
+
+typedef struct { //dns header
+    unsigned int ID:16; 
+    unsigned int RD:1;
+    unsigned int TC:1;
+    unsigned int AA:1;
+    unsigned int OPCODE:4;
+    unsigned int QR:1;
+    unsigned int RCODE:4;
+    unsigned int Z:3;  
+    unsigned int RA:1;
+    unsigned int QDCOUNT:16;
+    unsigned int ANCOUNT:16;
+    unsigned int NSCOUNT:16;
+    unsigned int ARCOUNT:16;     
 } dnsheader;
 
-typedef struct { //structure for DNS Question (see handout page 3-4)
-    unsigned short qtype;
-    unsigned short qclass;
-}   dnsquestion;
-
-typedef struct { //structure for DNS Answer
-unsigned char *name;
-unsigned short type;
-unsigned short _class;
-unsigned int ttl;
-unsigned short rdlength;
-unsigned char *rdata;
+typedef struct {
+    unsigned int TYPE:16; 
+    unsigned int CLASS:16;
+    unsigned int TTL:32;
+    unsigned int RDLENGTH:16;
+    //unsigned int PREFERENCE:16;
 } dnsanswer;
 
-#endif
+typedef struct {
+    unsigned int QTYPE:16;
+    unsigned int QCLASS:16;  
+} dnsquestion;
 
+#endif
